@@ -1,0 +1,32 @@
+spring:
+  application:
+    name: observability-lab
+
+  threads:
+    virtual:
+      enabled: false
+
+server:
+  port: 8080
+
+  tomcat:
+    mbeanregistry:
+      enabled: true
+
+    accesslog:
+      enabled: true
+      pattern: '%t %a "%r" %s %D'
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,threaddump
+
+  endpoint:
+    health:
+      show-details: always
+
+  metrics:
+    tags:
+      application: ${spring.application.name}
