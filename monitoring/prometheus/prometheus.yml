@@ -1,0 +1,16 @@
+global:
+  scrape_interval: 1s
+  evaluation_interval: 1s
+
+scrape_configs:
+  - job_name: observability-lab
+    metrics_path: /actuator/prometheus
+
+    static_configs:
+      - targets:
+          # Spring Boot runs on Windows. In WSL2 NAT mode, this is the
+          # Windows host address shown by `ip route show default`.
+          - 172.23.32.1:8080
+
+        labels:
+          environment: local

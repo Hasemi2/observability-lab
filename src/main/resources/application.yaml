@@ -21,12 +21,15 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics,threaddump
-
+        include: health,info,metrics,threaddump,prometheus
   endpoint:
     health:
       show-details: always
-
   metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+      slo:
+        http.server.requests: 100ms,500ms,1s,3s,5s,10s
     tags:
       application: ${spring.application.name}

@@ -1,0 +1,43 @@
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: observability-prometheus
+    restart: unless-stopped
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    ports:
+      - "9090:9090"
+
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=7d"
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: observability-grafana
+    restart: unless-stopped
+
+    depends_on:
+      - prometheus
+
+    ports:
+      - "3000:3000"
+
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+
+volumes:
+  prometheus-data:
+  grafana-data:
