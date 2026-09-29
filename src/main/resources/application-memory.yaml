@@ -1,0 +1,5 @@
+lab:
+  memory:
+    chunk-size-mib: 1
+    max-allocation-per-request-mib: 10
+    max-retained-mib: 80
