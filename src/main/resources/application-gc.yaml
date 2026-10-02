@@ -1,0 +1,6 @@
+lab:
+  gc:
+    default-total-mib: 500
+    default-chunk-kib: 256
+    max-total-mib: 2048
+    max-chunk-kib: 1024
