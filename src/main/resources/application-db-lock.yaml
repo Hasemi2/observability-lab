@@ -1,0 +1,14 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:observability-lock;DB_CLOSE_DELAY=-1;LOCK_TIMEOUT=15000
+    username: sa
+    password:
+
+lab:
+  db-lock:
+    max-hold-seconds: 30
+
+logging:
+  level:
+    org.springframework.jdbc.core.JdbcTemplate: DEBUG
+    org.springframework.jdbc.core.StatementCreatorUtils: TRACE
