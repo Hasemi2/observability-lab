@@ -15,6 +15,7 @@ Spring Boot 애플리케이션에서 발생할 수 있는 성능 문제를 직�
 | 정상 요청 | `GET /normal` | 기준 응답시간과 요청량 | 구현 완료 |
 | 느린 요청 | `GET /slow?seconds=10` | Tomcat 작업 스레드 점유와 응답 지연 | 구현 완료 |
 | DB 커넥션 점유 | `GET /db/hold?seconds=5` | HikariCP Active, Idle, Pending | 구현 완료 |
+| DB 행 잠금 | `POST /db/lock/hold?seconds=10` | 트랜잭션 대기와 잠금 전파 | 구현 완료 |
 | Heap 메모리 보유 | `POST /memory/allocate?mebibytes=10` | Heap 사용량과 장수 객체 | 구현 완료 |
 | Heap 메모리 해제 | `DELETE /memory` | 참조 해제 후 GC에 따른 Heap 변화 | 구현 완료 |
 | GC Churn | `POST /gc/churn` | 객체 할당률, Young GC, GC Pause | 구현 완료 |
@@ -22,7 +23,6 @@ Spring Boot 애플리케이션에서 발생할 수 있는 성능 문제를 직�
 다음 시나리오는 향후 학습 대상으로 남겨두었습니다.
 
 - Slow Query
-- DB Lock 및 트랜잭션 대기
 - 외부 API 응답 지연과 Timeout
 - CPU 부하
 - Thread `BLOCKED` / `WAITING`
@@ -69,6 +69,10 @@ observability-lab/
 │  ├─ connectionpool/
 │  │  ├─ ConnectionPoolController.java
 │  │  └─ ConnectionPoolService.java
+│  ├─ dblock/
+│  │  ├─ DbLockController.java
+│  │  ├─ DbLockService.java
+│  │  └─ DbLockInitializer.java
 │  ├─ memory/
 │  │  ├─ MemoryController.java
 │  │  ├─ MemoryService.java
@@ -85,6 +89,7 @@ observability-lab/
 │  ├─ application.yaml
 │  ├─ application-thread-pool.yaml
 │  ├─ application-connection-pool.yaml
+│  ├─ application-db-lock.yaml
 │  ├─ application-memory.yaml
 │  └─ application-gc.yaml
 ├─ src/test/java/com/practice/observability_lab/
@@ -130,6 +135,9 @@ Invoke-RestMethod "http://localhost:8080/actuator/health"
 # HikariCP 최대 커넥션 5개
 .\gradlew.bat bootRun --args="--spring.profiles.active=connection-pool"
 
+# H2 행 잠금 실험
+.\gradlew.bat bootRun --args="--spring.profiles.active=db-lock"
+
 # Heap 보유 실험
 .\gradlew.bat bootRun --args="--spring.profiles.active=memory"
 
@@ -137,7 +145,7 @@ Invoke-RestMethod "http://localhost:8080/actuator/health"
 .\gradlew.bat bootRun --args="--spring.profiles.active=gc"
 
 # 여러 실험을 함께 활성화
-.\gradlew.bat bootRun --args="--spring.profiles.active=connection-pool,memory,gc"
+.\gradlew.bat bootRun --args="--spring.profiles.active=connection-pool,db-lock,memory,gc"
 ```
 
 GC 실험에서 Heap 크기와 수집기를 명시하려면 실행 전에 다음 환경변수를 지정합니다.
@@ -296,7 +304,57 @@ hikaricp_connections_max
 - `connection-timeout` 안에 커넥션을 얻지 못하면 요청이 실패한다.
 - Tomcat 스레드가 남아 있어도 DB 커넥션이 부족하면 서비스는 지연될 수 있다.
 
-## 실험 3: Heap 메모리 보유
+## 실험 3: DB Lock 및 트랜잭션 대기
+
+`db-lock` 프로파일은 H2 인메모리 데이터베이스에 실험용 행 하나를 생성합니다. 잠금 획득 제한시간은 15초이며, 잠금 유지 API는 최대 30초까지 허용합니다.
+
+첫 번째 PowerShell에서 행 잠금을 10초 동안 유지합니다.
+
+```powershell
+Invoke-RestMethod -Method Post `
+  -Uri "http://localhost:8080/db/lock/hold?seconds=10"
+```
+
+첫 번째 요청이 실행 중일 때 두 번째 PowerShell에서 같은 행을 수정합니다.
+
+```powershell
+Measure-Command {
+    Invoke-RestMethod -Method Post `
+      -Uri "http://localhost:8080/db/lock/update"
+}
+```
+
+두 번째 요청은 첫 번째 트랜잭션이 커밋되고 행 잠금을 반환할 때까지 기다립니다. 현재 값과 애플리케이션이 측정한 보유·대기 요청 수는 다음 API로 확인합니다.
+
+```powershell
+Invoke-RestMethod "http://localhost:8080/db/lock/status"
+```
+
+사용자 정의 메트릭:
+
+```promql
+lab_db_lock_holders
+lab_db_lock_waiting
+lab_db_lock_acquire_seconds_count
+lab_db_lock_acquire_seconds_sum
+```
+
+업데이트 요청의 평균 잠금 획득 대기시간:
+
+```promql
+rate(lab_db_lock_acquire_seconds_sum{operation="update"}[5m])
+/
+rate(lab_db_lock_acquire_seconds_count{operation="update"}[5m])
+```
+
+학습 포인트:
+
+- 트랜잭션이 끝나기 전까지 행 잠금은 반환되지 않는다.
+- SQL 실행 자체가 단순해도 Lock 획득 대기 때문에 응답이 느려질 수 있다.
+- 대기 요청도 Tomcat 스레드와 HikariCP 커넥션을 점유한다.
+- 잠금 대기가 누적되면 DB 문제가 커넥션 풀과 HTTP 계층으로 전파될 수 있다.
+
+## 실험 4: Heap 메모리 보유
 
 메모리 API는 `memory` 프로파일에서만 활성화됩니다.
 
@@ -339,7 +397,7 @@ sum(jvm_memory_max_bytes{area="heap"} > 0)
 - 참조를 해제해도 실제 Heap 사용량은 GC가 실행된 후 감소한다.
 - 최대 Heap은 JVM의 상한이므로 실행 중 일반적으로 변하지 않는다.
 
-## 실험 4: GC Churn
+## 실험 5: GC Churn
 
 GC Churn API는 `gc` 프로파일에서만 활성화됩니다.
 
@@ -441,5 +499,4 @@ histogram_quantile(
 .\gradlew.bat test
 ```
 
-현재 테스트는 메모리 할당 제한, 상태 변경, GC Churn 기본값과 요청 제한, 사용자 정의 메트릭 기록을 검증합니다.
-
+현재 테스트는 DB 행 잠금 대기, 메모리 할당 제한과 상태 변경, GC Churn 기본값과 요청 제한, 사용자 정의 메트릭 기록을 검증합니다.
