@@ -19,11 +19,12 @@ Spring Boot 애플리케이션에서 발생할 수 있는 성능 문제를 직�
 | Heap 메모리 보유 | `POST /memory/allocate?mebibytes=10` | Heap 사용량과 장수 객체 | 구현 완료 |
 | Heap 메모리 해제 | `DELETE /memory` | 참조 해제 후 GC에 따른 Heap 변화 | 구현 완료 |
 | GC Churn | `POST /gc/churn` | 객체 할당률, Young GC, GC Pause | 구현 완료 |
+| 외부 API Mock | `GET /mock/external/*` | 정상·지연·오류 응답 | 1단계 구현 완료 |
 
 다음 시나리오는 향후 학습 대상으로 남겨두었습니다.
 
 - Slow Query
-- 외부 API 응답 지연과 Timeout
+- 외부 API Client Timeout, Retry, Circuit Breaker
 - CPU 부하
 - Thread `BLOCKED` / `WAITING`
 - 메모리 누수 및 Full GC 비교
@@ -79,10 +80,16 @@ observability-lab/
 │  │  ├─ MemoryProperties.java
 │  │  ├─ dto/
 │  │  └─ exception/
-│  └─ gc/
+│  ├─ gc/
 │     ├─ GcController.java
 │     ├─ GcService.java
 │     ├─ GcProperties.java
+│     ├─ dto/
+│     └─ exception/
+│  └─ mockexternal/
+│     ├─ MockExternalController.java
+│     ├─ MockExternalService.java
+│     ├─ MockExternalProperties.java
 │     ├─ dto/
 │     └─ exception/
 ├─ src/main/resources/
@@ -91,7 +98,8 @@ observability-lab/
 │  ├─ application-connection-pool.yaml
 │  ├─ application-db-lock.yaml
 │  ├─ application-memory.yaml
-│  └─ application-gc.yaml
+│  ├─ application-gc.yaml
+│  └─ application-external-api.yaml
 ├─ src/test/java/com/practice/observability_lab/
 │  ├─ memory/MemoryServiceTests.java
 │  └─ gc/GcServiceTests.java
@@ -144,8 +152,11 @@ Invoke-RestMethod "http://localhost:8080/actuator/health"
 # GC Churn 실험
 .\gradlew.bat bootRun --args="--spring.profiles.active=gc"
 
+# 외부 API Mock 실험
+.\gradlew.bat bootRun --args="--spring.profiles.active=external-api"
+
 # 여러 실험을 함께 활성화
-.\gradlew.bat bootRun --args="--spring.profiles.active=connection-pool,db-lock,memory,gc"
+.\gradlew.bat bootRun --args="--spring.profiles.active=connection-pool,db-lock,memory,gc,external-api"
 ```
 
 GC 실험에서 Heap 크기와 수집기를 명시하려면 실행 전에 다음 환경변수를 지정합니다.
@@ -454,6 +465,51 @@ sum(jvm_memory_max_bytes{area="heap"} > 0)
 - GC 발생 자체보다 GC 빈도, Pause 시간, HTTP 응답 지연을 함께 봐야 한다.
 - GC 후 Heap이 다시 내려오면 단명 객체 Churn에 가깝고, 최저점이 계속 상승하면 장수 객체나 메모리 누수를 의심할 수 있다.
 
+## 실험 6: 외부 API Mock
+
+외부 API 역할을 하는 Mock 엔드포인트는 `external-api` 프로파일에서만 활성화됩니다. 이 단계에서는 외부 API의 정상·지연·오류 응답만 재현하며, 실제 HTTP Client와 Timeout은 아직 적용하지 않습니다.
+
+정상 응답:
+
+```powershell
+Invoke-RestMethod "http://localhost:8080/mock/external/normal"
+```
+
+지연 응답:
+
+```powershell
+Measure-Command {
+    Invoke-RestMethod `
+      "http://localhost:8080/mock/external/delay?milliseconds=5000"
+}
+```
+
+오류 응답:
+
+```powershell
+curl.exe -i "http://localhost:8080/mock/external/error?status=503"
+```
+
+안전 제한:
+
+- 기본 지연시간은 5초입니다.
+- 지연시간은 0~30,000ms 범위만 허용합니다.
+- 오류 상태 코드는 400~599 범위만 허용합니다.
+- `/delay`는 의도적으로 `Thread.sleep()`을 사용해 요청 스레드를 점유합니다.
+
+사용자 정의 메트릭:
+
+```promql
+lab_mock_external_requests_total
+lab_mock_external_duration_seconds_count
+lab_mock_external_duration_seconds_sum
+lab_mock_external_inflight
+```
+
+Grafana 대시보드의 `외부 API Mock 실험` 영역에서는 시나리오별 요청률과 평균 처리시간, 현재 처리 중 요청 수, HTTP 상태 코드, Tomcat 작업 스레드를 함께 확인할 수 있습니다.
+
+다음 단계에서는 `/external/*` 호출 API가 이 Mock API를 실제 HTTP로 호출하도록 구현하고, Timeout 미적용과 적용 결과를 비교합니다.
+
 ## 주요 HTTP 메트릭
 
 URI별 초당 요청 수:
@@ -499,4 +555,4 @@ histogram_quantile(
 .\gradlew.bat test
 ```
 
-현재 테스트는 DB 행 잠금 대기, 메모리 할당 제한과 상태 변경, GC Churn 기본값과 요청 제한, 사용자 정의 메트릭 기록을 검증합니다.
+현재 테스트는 DB 행 잠금 대기, 메모리 할당 제한과 상태 변경, GC Churn, 외부 Mock API의 정상·지연·오류 조건을 검증합니다.

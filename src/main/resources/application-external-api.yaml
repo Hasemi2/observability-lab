@@ -1,0 +1,4 @@
+lab:
+  mock-external:
+    max-delay-milliseconds: 30000
+
